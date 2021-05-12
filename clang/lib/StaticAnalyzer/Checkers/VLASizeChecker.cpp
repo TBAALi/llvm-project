@@ -20,7 +20,7 @@
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicSize.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
@@ -126,7 +126,12 @@ ProgramStateRef VLASizeChecker::checkVLA(CheckerContext &C,
       // Size overflow check does not work with symbolic expressions because a
       // overflow situation can not be detected easily.
       uint64_t IndexL = IndexLVal->getZExtValue();
-      assert(IndexL > 0 && "Index length should have been checked for zero.");
+      // FIXME: See https://reviews.llvm.org/D80903 for discussion of
+      // some difference in assume and getKnownValue that leads to
+      // unexpected behavior. Just bail on IndexL == 0 at this point.
+      if (IndexL == 0)
+        return nullptr;
+
       if (KnownSize <= SizeMax / IndexL) {
         KnownSize *= IndexL;
       } else {
@@ -280,21 +285,11 @@ void VLASizeChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
     return;
   }
 
-  // VLASizeChecker is responsible for defining the extent of the array being
-  // declared. We do this by multiplying the array length by the element size,
-  // then matching that with the array region's extent symbol.
-
+  // VLASizeChecker is responsible for defining the extent of the array.
   if (VD) {
-    // Assume that the array's size matches the region size.
-    const LocationContext *LC = C.getLocationContext();
-    DefinedOrUnknownSVal DynSize =
-        getDynamicSize(State, State->getRegion(VD, LC), SVB);
-
-    DefinedOrUnknownSVal SizeIsKnown = SVB.evalEQ(State, DynSize, *ArraySizeNL);
-    State = State->assume(SizeIsKnown, true);
-
-    // Assume should not fail at this point.
-    assert(State);
+    State =
+        setDynamicExtent(State, State->getRegion(VD, C.getLocationContext()),
+                         ArraySize.castAs<DefinedOrUnknownSVal>(), SVB);
   }
 
   // Remember our assumptions!

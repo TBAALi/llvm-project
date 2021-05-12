@@ -61,7 +61,9 @@ public:
   CommandObjectWatchpointCommandAdd(CommandInterpreter &interpreter)
       : CommandObjectParsed(interpreter, "add",
                             "Add a set of LLDB commands to a watchpoint, to be "
-                            "executed whenever the watchpoint is hit.",
+                            "executed whenever the watchpoint is hit.  "
+                            "The commands added to the watchpoint replace any "
+                            "commands previously added to it.",
                             nullptr, eCommandRequiresTarget),
         IOHandlerDelegateMultiline("DONE",
                                    IOHandlerDelegate::Completion::LLDBCommand),
@@ -282,12 +284,12 @@ are no syntax errors may indicate that a function was declared but never called.
       ExecutionContext exe_ctx(context->exe_ctx_ref);
       Target *target = exe_ctx.GetTargetPtr();
       if (target) {
-        CommandReturnObject result;
         Debugger &debugger = target->GetDebugger();
+        CommandReturnObject result(debugger.GetUseColor());
+
         // Rig up the results secondary output stream to the debugger's, so the
         // output will come out synchronously if the debugger is set up that
         // way.
-
         StreamSP output_stream(debugger.GetAsyncOutputStream());
         StreamSP error_stream(debugger.GetAsyncErrorStream());
         result.SetImmediateOutputStream(output_stream);
@@ -301,7 +303,7 @@ are no syntax errors may indicate that a function was declared but never called.
         options.SetPrintErrors(true);
         options.SetAddToHistory(false);
 
-        debugger.GetCommandInterpreter().HandleCommands(commands, &exe_ctx,
+        debugger.GetCommandInterpreter().HandleCommands(commands, exe_ctx,
                                                         options, result);
         result.GetImmediateOutputStream()->Flush();
         result.GetImmediateErrorStream()->Flush();

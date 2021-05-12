@@ -16,8 +16,7 @@ int main() {
   MATCH(sizeof(std::int32_t), source->ElementBytes());
   TEST(source->IsAllocatable());
   TEST(!source->IsPointer());
-  TEST(source->Allocate(ones, sourceExtent, sizeof(std::int32_t)) ==
-      CFI_SUCCESS);
+  TEST(source->Allocate(ones, sourceExtent) == CFI_SUCCESS);
   TEST(source->IsAllocated());
   MATCH(2, source->GetDimension(0).Extent());
   MATCH(3, source->GetDimension(1).Extent());
@@ -53,7 +52,7 @@ int main() {
   MATCH(2, pad.GetDimension(1).Extent());
   MATCH(3, pad.GetDimension(2).Extent());
 
-  auto result{RESHAPE(*source, *shape, &pad)};
+  auto result{RTNAME(Reshape)(*source, *shape, &pad)};
   TEST(result.get() != nullptr);
   result->Check();
   MATCH(sizeof(std::int32_t), result->ElementBytes());

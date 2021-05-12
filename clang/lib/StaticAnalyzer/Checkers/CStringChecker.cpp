@@ -19,7 +19,7 @@
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicSize.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
@@ -346,7 +346,7 @@ ProgramStateRef CStringChecker::CheckLocation(CheckerContext &C,
   // Get the size of the array.
   const auto *superReg = cast<SubRegion>(ER->getSuperRegion());
   DefinedOrUnknownSVal Size =
-      getDynamicSize(state, superReg, C.getSValBuilder());
+      getDynamicExtent(state, superReg, C.getSValBuilder());
 
   // Get the index of the accessed element.
   DefinedOrUnknownSVal Idx = ER->getIndex().castAs<DefinedOrUnknownSVal>();
@@ -709,7 +709,8 @@ ProgramStateRef CStringChecker::setCStringLength(ProgramStateRef state,
 
   case MemRegion::SymbolicRegionKind:
   case MemRegion::AllocaRegionKind:
-  case MemRegion::VarRegionKind:
+  case MemRegion::NonParamVarRegionKind:
+  case MemRegion::ParamVarRegionKind:
   case MemRegion::FieldRegionKind:
   case MemRegion::ObjCIvarRegionKind:
     // These are the types we can currently track string lengths for.
@@ -814,7 +815,8 @@ SVal CStringChecker::getCStringLength(CheckerContext &C, ProgramStateRef &state,
   }
   case MemRegion::SymbolicRegionKind:
   case MemRegion::AllocaRegionKind:
-  case MemRegion::VarRegionKind:
+  case MemRegion::NonParamVarRegionKind:
+  case MemRegion::ParamVarRegionKind:
   case MemRegion::FieldRegionKind:
   case MemRegion::ObjCIvarRegionKind:
     return getCStringLengthForRegion(C, state, Ex, MR, hypothetical);
@@ -921,7 +923,7 @@ bool CStringChecker::IsFirstBufInBound(CheckerContext &C,
 
   // Get the size of the array.
   const SubRegion *superReg = cast<SubRegion>(ER->getSuperRegion());
-  DefinedOrUnknownSVal SizeDV = getDynamicSize(state, superReg, svalBuilder);
+  DefinedOrUnknownSVal SizeDV = getDynamicExtent(state, superReg, svalBuilder);
 
   // Get the index of the accessed element.
   DefinedOrUnknownSVal Idx = ER->getIndex().castAs<DefinedOrUnknownSVal>();
@@ -1009,8 +1011,12 @@ bool CStringChecker::SummarizeRegion(raw_ostream &os, ASTContext &Ctx,
     os << "a C++ temp object of type "
        << cast<TypedValueRegion>(MR)->getValueType().getAsString();
     return true;
-  case MemRegion::VarRegionKind:
+  case MemRegion::NonParamVarRegionKind:
     os << "a variable of type"
+       << cast<TypedValueRegion>(MR)->getValueType().getAsString();
+    return true;
+  case MemRegion::ParamVarRegionKind:
+    os << "a parameter of type"
        << cast<TypedValueRegion>(MR)->getValueType().getAsString();
     return true;
   case MemRegion::FieldRegionKind:
@@ -1054,7 +1060,7 @@ bool CStringChecker::memsetAux(const Expr *DstBuffer, SVal CharVal,
   if (Offset.isValid() && !Offset.hasSymbolicOffset() &&
       Offset.getOffset() == 0) {
     // Get the base region's size.
-    DefinedOrUnknownSVal SizeDV = getDynamicSize(State, BR, svalBuilder);
+    DefinedOrUnknownSVal SizeDV = getDynamicExtent(State, BR, svalBuilder);
 
     ProgramStateRef StateWholeReg, StateNotWholeReg;
     std::tie(StateWholeReg, StateNotWholeReg) =

@@ -85,11 +85,6 @@ enum CleanupKind : unsigned {
 
   NormalAndEHCleanup = EHCleanup | NormalCleanup,
 
-  InactiveCleanup = 0x4,
-  InactiveEHCleanup = EHCleanup | InactiveCleanup,
-  InactiveNormalCleanup = NormalCleanup | InactiveCleanup,
-  InactiveNormalAndEHCleanup = NormalAndEHCleanup | InactiveCleanup,
-
   LifetimeMarker = 0x8,
   NormalEHLifetimeMarker = LifetimeMarker | NormalAndEHCleanup,
 };
@@ -154,6 +149,8 @@ public:
     Cleanup(const Cleanup &) = default;
     Cleanup(Cleanup &&) {}
     Cleanup() = default;
+
+    virtual bool isRedundantBeforeReturn() { return false; }
 
     /// Generation flags.
     class Flags {

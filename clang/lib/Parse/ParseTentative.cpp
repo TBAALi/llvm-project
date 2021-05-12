@@ -842,7 +842,8 @@ Parser::TPResult Parser::TryParsePtrOperatorSeq() {
 
       while (Tok.isOneOf(tok::kw_const, tok::kw_volatile, tok::kw_restrict,
                          tok::kw__Nonnull, tok::kw__Nullable,
-                         tok::kw__Null_unspecified, tok::kw__Atomic))
+                         tok::kw__Nullable_result, tok::kw__Null_unspecified,
+                         tok::kw__Atomic))
         ConsumeToken();
     } else {
       return TPResult::True;
@@ -1110,8 +1111,9 @@ class TentativeParseCCC final : public CorrectionCandidateCallback {
 public:
   TentativeParseCCC(const Token &Next) {
     WantRemainingKeywords = false;
-    WantTypeSpecifiers = Next.isOneOf(tok::l_paren, tok::r_paren, tok::greater,
-                                      tok::l_brace, tok::identifier);
+    WantTypeSpecifiers =
+        Next.isOneOf(tok::l_paren, tok::r_paren, tok::greater, tok::l_brace,
+                     tok::identifier, tok::comma);
   }
 
   bool ValidateCandidate(const TypoCorrection &Candidate) override {
@@ -1436,6 +1438,7 @@ Parser::isCXXDeclarationSpecifier(Parser::TPResult BracedCastResult,
   case tok::kw___unaligned:
   case tok::kw__Nonnull:
   case tok::kw__Nullable:
+  case tok::kw__Nullable_result:
   case tok::kw__Null_unspecified:
   case tok::kw___kindof:
     return TPResult::True;
@@ -1631,6 +1634,7 @@ Parser::isCXXDeclarationSpecifier(Parser::TPResult BracedCastResult,
   case tok::kw_half:
   case tok::kw_float:
   case tok::kw_double:
+  case tok::kw___bf16:
   case tok::kw__Float16:
   case tok::kw___float128:
   case tok::kw_void:
@@ -1744,6 +1748,7 @@ bool Parser::isCXXDeclarationSpecifierAType() {
   case tok::kw_half:
   case tok::kw_float:
   case tok::kw_double:
+  case tok::kw___bf16:
   case tok::kw__Float16:
   case tok::kw___float128:
   case tok::kw_void:

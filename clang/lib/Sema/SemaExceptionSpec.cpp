@@ -35,10 +35,12 @@ static const FunctionProtoType *GetUnderlyingFunction(QualType T)
   return T->getAs<FunctionProtoType>();
 }
 
-/// HACK: libstdc++ has a bug where it shadows std::swap with a member
-/// swap function then tries to call std::swap unqualified from the exception
-/// specification of that function. This function detects whether we're in
-/// such a case and turns off delay-parsing of exception specifications.
+/// HACK: 2014-11-14 libstdc++ had a bug where it shadows std::swap with a
+/// member swap function then tries to call std::swap unqualified from the
+/// exception specification of that function. This function detects whether
+/// we're in such a case and turns off delay-parsing of exception
+/// specifications. Libstdc++ 6.1 (released 2016-04-27) appears to have
+/// resolved it as side-effect of commit ddb63209a8d (2015-06-05).
 bool Sema::isLibstdcxxEagerExceptionSpecHack(const Declarator &D) {
   auto *RD = dyn_cast<CXXRecordDecl>(CurContext);
 
@@ -99,9 +101,7 @@ ExprResult Sema::ActOnNoexceptSpec(SourceLocation NoexceptLoc,
 
   llvm::APSInt Result;
   Converted = VerifyIntegerConstantExpression(
-      Converted.get(), &Result,
-      diag::err_noexcept_needs_constant_expression,
-      /*AllowFold*/ false);
+      Converted.get(), &Result, diag::err_noexcept_needs_constant_expression);
   if (!Converted.isInvalid())
     EST = !Result ? EST_NoexceptFalse : EST_NoexceptTrue;
   return Converted;
@@ -999,10 +999,8 @@ static CanThrowResult canSubStmtsThrow(Sema &Self, const Stmt *S) {
   return R;
 }
 
-/// Determine whether the callee of a particular function call can throw.
-/// E and D are both optional, but at least one of E and Loc must be specified.
-static CanThrowResult canCalleeThrow(Sema &S, const Expr *E, const Decl *D,
-                                     SourceLocation Loc = SourceLocation()) {
+CanThrowResult Sema::canCalleeThrow(Sema &S, const Expr *E, const Decl *D,
+                                    SourceLocation Loc) {
   // As an extension, we assume that __attribute__((nothrow)) functions don't
   // throw.
   if (D && isa<FunctionDecl>(D) && D->hasAttr<NoThrowAttr>())
@@ -1048,7 +1046,8 @@ static CanThrowResult canCalleeThrow(Sema &S, const Expr *E, const Decl *D,
   if (!FT)
     return CT_Can;
 
-  FT = S.ResolveExceptionSpec(Loc.isInvalid() ? E->getBeginLoc() : Loc, FT);
+  if (Loc.isValid() || (Loc.isInvalid() && E))
+    FT = S.ResolveExceptionSpec(Loc.isInvalid() ? E->getBeginLoc() : Loc, FT);
   if (!FT)
     return CT_Can;
 
@@ -1069,7 +1068,7 @@ static CanThrowResult canVarDeclThrow(Sema &Self, const VarDecl *VD) {
             VD->getType()->getBaseElementTypeUnsafe()->getAsCXXRecordDecl()) {
       if (auto *Dtor = RD->getDestructor()) {
         CT = mergeCanThrow(
-            CT, canCalleeThrow(Self, nullptr, Dtor, VD->getLocation()));
+            CT, Sema::canCalleeThrow(Self, nullptr, Dtor, VD->getLocation()));
       }
     }
   }
@@ -1299,6 +1298,7 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
 
     // Some might be dependent for other reasons.
   case Expr::ArraySubscriptExprClass:
+  case Expr::MatrixSubscriptExprClass:
   case Expr::OMPArraySectionExprClass:
   case Expr::OMPArrayShapingExprClass:
   case Expr::OMPIteratorExprClass:
@@ -1450,6 +1450,7 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::OMPMasterTaskLoopDirectiveClass:
   case Stmt::OMPMasterTaskLoopSimdDirectiveClass:
   case Stmt::OMPOrderedDirectiveClass:
+  case Stmt::OMPCanonicalLoopClass:
   case Stmt::OMPParallelDirectiveClass:
   case Stmt::OMPParallelForDirectiveClass:
   case Stmt::OMPParallelForSimdDirectiveClass:
@@ -1460,6 +1461,7 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::OMPSectionDirectiveClass:
   case Stmt::OMPSectionsDirectiveClass:
   case Stmt::OMPSimdDirectiveClass:
+  case Stmt::OMPTileDirectiveClass:
   case Stmt::OMPSingleDirectiveClass:
   case Stmt::OMPTargetDataDirectiveClass:
   case Stmt::OMPTargetDirectiveClass:
@@ -1486,6 +1488,9 @@ CanThrowResult Sema::canThrow(const Stmt *S) {
   case Stmt::OMPTeamsDistributeParallelForDirectiveClass:
   case Stmt::OMPTeamsDistributeParallelForSimdDirectiveClass:
   case Stmt::OMPTeamsDistributeSimdDirectiveClass:
+  case Stmt::OMPInteropDirectiveClass:
+  case Stmt::OMPDispatchDirectiveClass:
+  case Stmt::OMPMaskedDirectiveClass:
   case Stmt::ReturnStmtClass:
   case Stmt::SEHExceptStmtClass:
   case Stmt::SEHFinallyStmtClass:

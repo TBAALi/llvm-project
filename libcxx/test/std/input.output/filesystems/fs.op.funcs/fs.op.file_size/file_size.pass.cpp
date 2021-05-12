@@ -6,7 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: c++98, c++03
+// UNSUPPORTED: c++03
+
+// The string reported on errors changed, which makes those tests fail when run
+// against already-released libc++'s.
+// XFAIL: use_system_cxx_lib && x86_64-apple-macosx10.15
 
 // <filesystem>
 

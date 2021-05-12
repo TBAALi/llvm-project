@@ -103,10 +103,38 @@ class LLDB(DebuggerBase):
     def clear_breakpoints(self):
         self._target.DeleteAllBreakpoints()
 
-    def add_breakpoint(self, file_, line):
-        if not self._target.BreakpointCreateByLocation(file_, line):
-            raise LoadDebuggerException(
+    def _add_breakpoint(self, file_, line):
+        bp = self._target.BreakpointCreateByLocation(file_, line)
+        if not bp:
+            raise DebuggerException(
                 'could not add breakpoint [{}:{}]'.format(file_, line))
+        return bp.GetID()
+
+    def _add_conditional_breakpoint(self, file_, line, condition):
+        bp = self._target.BreakpointCreateByLocation(file_, line)
+        if bp:
+            bp.SetCondition(condition)
+        else:
+            raise DebuggerException(
+                  'could not add breakpoint [{}:{}]'.format(file_, line))
+        return bp.GetID()
+
+    def get_triggered_breakpoint_ids(self):
+        # Breakpoints can only have been triggered if we've hit one.
+        stop_reason = self._translate_stop_reason(self._thread.GetStopReason())
+        if stop_reason != StopReason.BREAKPOINT:
+            return []
+        # Breakpoints have two data parts: Breakpoint ID, Location ID. We're
+        # only interested in the Breakpoint ID so we skip every other item.
+        return set([self._thread.GetStopReasonDataAtIndex(i)
+                    for i in range(0, self._thread.GetStopReasonDataCount(), 2)])
+
+    def delete_breakpoint(self, id):
+        bp = self._target.FindBreakpointByID(id)
+        if not bp:
+            # The ID is not valid.
+            raise KeyError
+        self._target.BreakpointDelete(bp.GetID())
 
     def launch(self):
         self._process = self._target.LaunchSimple(None, None, os.getcwd())
@@ -124,7 +152,7 @@ class LLDB(DebuggerBase):
         self._process.Continue()
         return ReturnCode.OK
 
-    def get_step_info(self, watches, step_index):
+    def _get_step_info(self, watches, step_index):
         frames = []
         state_frames = []
 

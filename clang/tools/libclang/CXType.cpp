@@ -608,6 +608,7 @@ CXString clang_getTypeKindSpelling(enum CXTypeKind K) {
     TKIND(Elaborated);
     TKIND(Pipe);
     TKIND(Attributed);
+    TKIND(BFloat16);
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) TKIND(Id);
 #include "clang/Basic/OpenCLImageTypes.def"
 #undef IMAGE_TYPE
@@ -1029,7 +1030,7 @@ long long clang_Type_getOffsetOf(CXType PT, const char *S) {
   // and we would return InvalidFieldName instead of Incomplete.
   // But this erroneous results does protects again a hidden assertion failure
   // in the RecordLayoutBuilder
-  if (Res.size() != 1)
+  if (!Res.isSingleResult())
     return CXTypeLayoutError_InvalidFieldName;
   if (const FieldDecl *FD = dyn_cast<FieldDecl>(Res.front()))
     return Ctx.getFieldOffset(FD);
@@ -1314,6 +1315,8 @@ enum CXTypeNullabilityKind clang_Type_getNullability(CXType CT) {
         return CXTypeNullability_NonNull;
       case NullabilityKind::Nullable:
         return CXTypeNullability_Nullable;
+      case NullabilityKind::NullableResult:
+        return CXTypeNullability_NullableResult;
       case NullabilityKind::Unspecified:
         return CXTypeNullability_Unspecified;
     }

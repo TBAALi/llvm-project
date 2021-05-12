@@ -47,6 +47,7 @@
 #include "AllocationState.h"
 #include "InterCheckerAPI.h"
 #include "clang/AST/Attr.h"
+#include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ParentMap.h"
@@ -62,7 +63,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerHelpers.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicSize.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/DynamicExtent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramStateTrait.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
@@ -507,10 +508,6 @@ private:
                                       SVal Size, SVal Init,
                                       ProgramStateRef State,
                                       AllocationFamily Family);
-
-  LLVM_NODISCARD
-  static ProgramStateRef addExtentSize(CheckerContext &C, const CXXNewExpr *NE,
-                                       ProgramStateRef State, SVal Target);
 
   // Check if this malloc() for special flags. At present that means M_ZERO or
   // __GFP_ZERO (in which case, treat it like calloc).
@@ -1037,9 +1034,44 @@ void MallocChecker::checkKernelMalloc(const CallEvent &Call,
   C.addTransition(State);
 }
 
-void MallocChecker::checkRealloc(const CallEvent &Call,
-                                 CheckerContext &C,
+static bool isStandardRealloc(const CallEvent &Call) {
+  const FunctionDecl *FD = dyn_cast<FunctionDecl>(Call.getDecl());
+  assert(FD);
+  ASTContext &AC = FD->getASTContext();
+
+  if (isa<CXXMethodDecl>(FD))
+    return false;
+
+  return FD->getDeclaredReturnType().getDesugaredType(AC) == AC.VoidPtrTy &&
+         FD->getParamDecl(0)->getType().getDesugaredType(AC) == AC.VoidPtrTy &&
+         FD->getParamDecl(1)->getType().getDesugaredType(AC) ==
+             AC.getSizeType();
+}
+
+static bool isGRealloc(const CallEvent &Call) {
+  const FunctionDecl *FD = dyn_cast<FunctionDecl>(Call.getDecl());
+  assert(FD);
+  ASTContext &AC = FD->getASTContext();
+
+  if (isa<CXXMethodDecl>(FD))
+    return false;
+
+  return FD->getDeclaredReturnType().getDesugaredType(AC) == AC.VoidPtrTy &&
+         FD->getParamDecl(0)->getType().getDesugaredType(AC) == AC.VoidPtrTy &&
+         FD->getParamDecl(1)->getType().getDesugaredType(AC) ==
+             AC.UnsignedLongTy;
+}
+
+void MallocChecker::checkRealloc(const CallEvent &Call, CheckerContext &C,
                                  bool ShouldFreeOnFail) const {
+  // HACK: CallDescription currently recognizes non-standard realloc functions
+  // as standard because it doesn't check the type, or wether its a non-method
+  // function. This should be solved by making CallDescription smarter.
+  // Mind that this came from a bug report, and all other functions suffer from
+  // this.
+  // https://bugs.llvm.org/show_bug.cgi?id=46253
+  if (!isStandardRealloc(Call) && !isGRealloc(Call))
+    return;
   ProgramStateRef State = C.getState();
   State = ReallocMemAux(C, Call, ShouldFreeOnFail, State, AF_Malloc);
   State = ProcessZeroAllocCheck(Call, 1, State);
@@ -1388,7 +1420,6 @@ MallocChecker::processNewAllocation(const CXXAllocatorCall &Call,
   // existing binding.
   SVal Target = Call.getObjectUnderConstruction();
   State = MallocUpdateRefState(C, NE, State, Family, Target);
-  State = addExtentSize(C, NE, State, Target);
   State = ProcessZeroAllocCheck(Call, 0, State, Target);
   return State;
 }
@@ -1401,52 +1432,6 @@ void MallocChecker::checkNewAllocator(const CXXAllocatorCall &Call,
         (Call.getOriginExpr()->isArray() ? AF_CXXNewArray : AF_CXXNew));
     C.addTransition(State);
   }
-}
-
-// Sets the extent value of the MemRegion allocated by
-// new expression NE to its size in Bytes.
-//
-ProgramStateRef MallocChecker::addExtentSize(CheckerContext &C,
-                                             const CXXNewExpr *NE,
-                                             ProgramStateRef State,
-                                             SVal Target) {
-  if (!State)
-    return nullptr;
-  SValBuilder &svalBuilder = C.getSValBuilder();
-  SVal ElementCount;
-  const SubRegion *Region;
-  if (NE->isArray()) {
-    const Expr *SizeExpr = *NE->getArraySize();
-    ElementCount = C.getSVal(SizeExpr);
-    // Store the extent size for the (symbolic)region
-    // containing the elements.
-    Region = Target.getAsRegion()
-                 ->castAs<SubRegion>()
-                 ->StripCasts()
-                 ->castAs<SubRegion>();
-  } else {
-    ElementCount = svalBuilder.makeIntVal(1, true);
-    Region = Target.getAsRegion()->castAs<SubRegion>();
-  }
-
-  // Set the region's extent equal to the Size in Bytes.
-  QualType ElementType = NE->getAllocatedType();
-  ASTContext &AstContext = C.getASTContext();
-  CharUnits TypeSize = AstContext.getTypeSizeInChars(ElementType);
-
-  if (ElementCount.getAs<NonLoc>()) {
-    DefinedOrUnknownSVal DynSize = getDynamicSize(State, Region, svalBuilder);
-
-    // size in Bytes = ElementCount*TypeSize
-    SVal SizeInBytes = svalBuilder.evalBinOpNN(
-        State, BO_Mul, ElementCount.castAs<NonLoc>(),
-        svalBuilder.makeArrayIndex(TypeSize.getQuantity()),
-        svalBuilder.getArrayIndexType());
-    DefinedOrUnknownSVal DynSizeMatchesSize = svalBuilder.evalEQ(
-        State, DynSize, SizeInBytes.castAs<DefinedOrUnknownSVal>());
-    State = State->assume(DynSizeMatchesSize, true);
-  }
-  return State;
 }
 
 static bool isKnownDeallocObjCMethodName(const ObjCMethodCall &Call) {
@@ -1552,21 +1537,9 @@ ProgramStateRef MallocChecker::MallocMemAux(CheckerContext &C,
   // Fill the region with the initialization value.
   State = State->bindDefaultInitial(RetVal, Init, LCtx);
 
-  // Set the region's extent equal to the Size parameter.
-  const SymbolicRegion *R =
-      dyn_cast_or_null<SymbolicRegion>(RetVal.getAsRegion());
-  if (!R)
-    return nullptr;
-  if (Optional<DefinedOrUnknownSVal> DefinedSize =
-          Size.getAs<DefinedOrUnknownSVal>()) {
-    DefinedOrUnknownSVal DynSize = getDynamicSize(State, R, svalBuilder);
-
-    DefinedOrUnknownSVal DynSizeMatchesSize =
-        svalBuilder.evalEQ(State, DynSize, *DefinedSize);
-
-    State = State->assume(DynSizeMatchesSize, true);
-    assert(State);
-  }
+  // Set the region's extent.
+  State = setDynamicExtent(State, RetVal.getAsRegion(),
+                           Size.castAs<DefinedOrUnknownSVal>(), svalBuilder);
 
   return MallocUpdateRefState(C, CE, State, Family);
 }
@@ -2470,7 +2443,7 @@ MallocChecker::ReallocMemAux(CheckerContext &C, const CallEvent &Call,
       Kind = OAR_DoNotTrackAfterFailure;
 
     // Get the from and to pointer symbols as in toPtr = realloc(fromPtr, size).
-    SymbolRef FromPtr = arg0Val.getAsSymbol();
+    SymbolRef FromPtr = arg0Val.getLocSymbolInBase();
     SVal RetVal = C.getSVal(CE);
     SymbolRef ToPtr = RetVal.getAsSymbol();
     assert(FromPtr && ToPtr &&
@@ -3074,11 +3047,6 @@ bool MallocChecker::mayFreeAnyEscapedMemoryOrIsModeledExplicitly(
     return true;
   }
 
-  if (FName == "postEvent" &&
-      FD->getQualifiedNameAsString() == "QCoreApplication::postEvent") {
-    return true;
-  }
-
   if (FName == "connectImpl" &&
       FD->getQualifiedNameAsString() == "QObject::connectImpl") {
     return true;
@@ -3265,14 +3233,16 @@ PathDiagnosticPieceRef MallocBugVisitor::VisitNode(const ExplodedNode *N,
             OS << "reallocated by call to '";
             const Stmt *S = RSCurr->getStmt();
             if (const auto *MemCallE = dyn_cast<CXXMemberCallExpr>(S)) {
-              OS << MemCallE->getMethodDecl()->getNameAsString();
+              OS << MemCallE->getMethodDecl()->getDeclName();
             } else if (const auto *OpCallE = dyn_cast<CXXOperatorCallExpr>(S)) {
-              OS << OpCallE->getDirectCallee()->getNameAsString();
+              OS << OpCallE->getDirectCallee()->getDeclName();
             } else if (const auto *CallE = dyn_cast<CallExpr>(S)) {
               auto &CEMgr = BRC.getStateManager().getCallEventManager();
               CallEventRef<> Call = CEMgr.getSimpleCall(CallE, state, CurrentLC);
-              const auto *D = dyn_cast_or_null<NamedDecl>(Call->getDecl());
-              OS << (D ? D->getNameAsString() : "unknown");
+              if (const auto *D = dyn_cast_or_null<NamedDecl>(Call->getDecl()))
+                OS << D->getDeclName();
+              else
+                OS << "unknown";
             }
             OS << "'";
             StackHint = std::make_unique<StackHintGeneratorForSymbol>(

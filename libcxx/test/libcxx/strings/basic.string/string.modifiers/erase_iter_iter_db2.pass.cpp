@@ -10,8 +10,9 @@
 
 // Call erase(const_iterator first, const_iterator last); with second iterator from another container
 
-#if _LIBCPP_DEBUG >= 1
+// UNSUPPORTED: libcxx-no-debug-mode
 
+// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DEBUG=1
 #define _LIBCPP_ASSERT(x, m) ((x) ? (void)0 : std::exit(0))
 
 #include <string>
@@ -20,33 +21,13 @@
 #include <cstdlib>
 
 #include "test_macros.h"
-#include "min_allocator.h"
 
 int main(int, char**)
 {
-    {
     std::string l1("123");
     std::string l2("123");
     std::string::iterator i = l1.erase(l1.cbegin(), l2.cbegin()+1);
     assert(false);
-    }
-#if TEST_STD_VER >= 11
-    {
-    typedef std::basic_string<char, std::char_traits<char>, min_allocator<char>> S;
-    S l1("123");
-    S l2("123");
-    S::iterator i = l1.erase(l1.cbegin(), l2.cbegin()+1);
-    assert(false);
-    }
-#endif
+
+    return 0;
 }
-
-#else
-
-int main(int, char**)
-{
-
-  return 0;
-}
-
-#endif

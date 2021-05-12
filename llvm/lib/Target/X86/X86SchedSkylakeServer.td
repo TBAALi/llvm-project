@@ -583,6 +583,7 @@ def : WriteRes<WriteSystem,     [SKXPort0156]> { let Latency = 100; } // def Wri
 defm : SKXWriteResPair<WriteFShuffle256, [SKXPort5], 3, [1], 1, 7>; // Fp 256-bit width vector shuffles.
 defm : SKXWriteResPair<WriteFVarShuffle256, [SKXPort5], 3, [1], 1, 7>; // Fp 256-bit width vector variable shuffles.
 defm : SKXWriteResPair<WriteShuffle256, [SKXPort5], 3, [1], 1, 7>;  // 256-bit width vector shuffles.
+defm : SKXWriteResPair<WriteVPMOV256, [SKXPort5], 3, [1], 1, 7>;  // 256-bit width packed vector width-changing move.
 defm : SKXWriteResPair<WriteVarShuffle256, [SKXPort5], 3, [1], 1, 7>;  // 256-bit width vector variable shuffles.
 
 // Old microcoded instructions that nobody use.
@@ -1182,7 +1183,7 @@ def SKXWriteResGroup76 : SchedWriteRes<[SKXPort6,SKXPort23]> {
   let NumMicroOps = 2;
   let ResourceCycles = [1,1];
 }
-def: InstRW<[SKXWriteResGroup76], (instrs FARJMP64)>;
+def: InstRW<[SKXWriteResGroup76], (instrs FARJMP64m)>;
 def: InstRW<[SKXWriteResGroup76], (instregex "JMP(16|32|64)m")>;
 
 def SKXWriteResGroup79 : SchedWriteRes<[SKXPort23,SKXPort15]> {
@@ -1467,7 +1468,7 @@ def SKXWriteResGroup109 : SchedWriteRes<[SKXPort4,SKXPort6,SKXPort23,SKXPort237,
   let ResourceCycles = [1,1,1,1,1];
 }
 def: InstRW<[SKXWriteResGroup109], (instregex "CALL(16|32|64)m")>;
-def: InstRW<[SKXWriteResGroup109], (instrs FARCALL64)>;
+def: InstRW<[SKXWriteResGroup109], (instrs FARCALL64m)>;
 
 def SKXWriteResGroup110 : SchedWriteRes<[SKXPort0,SKXPort4,SKXPort237,SKXPort0156]> {
   let Latency = 7;

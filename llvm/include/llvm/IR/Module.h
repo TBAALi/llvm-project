@@ -46,6 +46,7 @@ class FunctionType;
 class GVMaterializer;
 class LLVMContext;
 class MemoryBuffer;
+class ModuleSummaryIndex;
 class Pass;
 class RandomNumberGenerator;
 template <class PtrType> class SmallPtrSetImpl;
@@ -196,6 +197,14 @@ private:
                                   ///< Format: (arch)(sub)-(vendor)-(sys0-(abi)
   NamedMDSymTabType NamedMDSymTab;  ///< NamedMDNode names.
   DataLayout DL;                  ///< DataLayout associated with the module
+  StringMap<unsigned>
+      CurrentIntrinsicIds; ///< Keep track of the current unique id count for
+                           ///< the specified intrinsic basename.
+  DenseMap<std::pair<Intrinsic::ID, const FunctionType *>, unsigned>
+      UniquedIntrinsicNames; ///< Keep track of uniqued names of intrinsics
+                             ///< based on unnamed types. The combination of
+                             ///< ID and FunctionType maps to the extension that
+                             ///< is used to make the intrinsic name unique.
 
   friend class Constant;
 
@@ -220,7 +229,7 @@ public:
   /// Returns the number of non-debug IR instructions in the module.
   /// This is equivalent to the sum of the IR instruction counts of each
   /// function contained in the module.
-  unsigned getInstructionCount();
+  unsigned getInstructionCount() const;
 
   /// Get the module's original source file name. When compiling from
   /// bitcode, this is taken from a bitcode record where it was recorded.
@@ -328,11 +337,12 @@ public:
   /// \see LLVMContext::getOperandBundleTagID
   void getOperandBundleTags(SmallVectorImpl<StringRef> &Result) const;
 
-  /// Return the type with the specified name, or null if there is none by that
-  /// name.
-  StructType *getTypeByName(StringRef Name) const;
-
   std::vector<StructType *> getIdentifiedStructTypes() const;
+
+  /// Return a unique name for an intrinsic whose mangling is based on an
+  /// unnamed type. The Proto represents the function prototype.
+  std::string getUniqueIntrinsicName(StringRef BaseName, Intrinsic::ID Id,
+                                     const FunctionType *Proto);
 
 /// @}
 /// @name Function Accessors
@@ -592,6 +602,7 @@ public:
   const_global_iterator global_begin() const { return GlobalList.begin(); }
   global_iterator       global_end  ()       { return GlobalList.end(); }
   const_global_iterator global_end  () const { return GlobalList.end(); }
+  size_t                global_size () const { return GlobalList.size(); }
   bool                  global_empty() const { return GlobalList.empty(); }
 
   iterator_range<global_iterator> globals() {
@@ -707,14 +718,19 @@ public:
   }
 
   /// An iterator for DICompileUnits that skips those marked NoDebug.
-  class debug_compile_units_iterator
-      : public std::iterator<std::input_iterator_tag, DICompileUnit *> {
+  class debug_compile_units_iterator {
     NamedMDNode *CUs;
     unsigned Idx;
 
     void SkipNoDebugCUs();
 
   public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = DICompileUnit *;
+    using difference_type = std::ptrdiff_t;
+    using pointer = value_type *;
+    using reference = value_type &;
+
     explicit debug_compile_units_iterator(NamedMDNode *CUs, unsigned Idx)
         : CUs(CUs), Idx(Idx) {
       SkipNoDebugCUs();
@@ -807,6 +823,9 @@ public:
   /// Returns the Dwarf Version by checking module flags.
   unsigned getDwarfVersion() const;
 
+  /// Returns the DWARF format by checking module flags.
+  bool isDwarf64() const;
+
   /// Returns the CodeView Version by checking module flags.
   /// Returns zero if not present in module.
   unsigned getCodeViewFlag() const;
@@ -852,12 +871,11 @@ public:
 
   /// Returns profile summary metadata. When IsCS is true, use the context
   /// sensitive profile summary.
-  Metadata *getProfileSummary(bool IsCS);
+  Metadata *getProfileSummary(bool IsCS) const;
   /// @}
 
   /// Returns whether semantic interposition is to be respected.
   bool getSemanticInterposition() const;
-  bool noSemanticInterposition() const;
 
   /// Set whether semantic interposition is to be respected.
   void setSemanticInterposition(bool);
@@ -867,6 +885,15 @@ public:
 
   /// Set that PLT should be avoid for RTLib calls.
   void setRtLibUseGOT();
+
+  /// Get/set whether synthesized functions should get the uwtable attribute.
+  bool getUwtable() const;
+  void setUwtable();
+
+  /// Get/set whether synthesized functions should get the "frame-pointer"
+  /// attribute.
+  FramePointerKind getFramePointer() const;
+  void setFramePointer(FramePointerKind Kind);
 
   /// @name Utility functions for querying and setting the build SDK version
   /// @{
@@ -882,12 +909,17 @@ public:
 
   /// Take ownership of the given memory buffer.
   void setOwnedMemoryBuffer(std::unique_ptr<MemoryBuffer> MB);
+
+  /// Set the partial sample profile ratio in the profile summary module flag,
+  /// if applicable.
+  void setPartialSampleProfileRatio(const ModuleSummaryIndex &Index);
 };
 
-/// Given "llvm.used" or "llvm.compiler.used" as a global name, collect
-/// the initializer elements of that global in Set and return the global itself.
+/// Given "llvm.used" or "llvm.compiler.used" as a global name, collect the
+/// initializer elements of that global in a SmallVector and return the global
+/// itself.
 GlobalVariable *collectUsedGlobalVariables(const Module &M,
-                                           SmallPtrSetImpl<GlobalValue *> &Set,
+                                           SmallVectorImpl<GlobalValue *> &Vec,
                                            bool CompilerUsed);
 
 /// An raw_ostream inserter for modules.

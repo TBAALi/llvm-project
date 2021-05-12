@@ -70,7 +70,6 @@ AST_POLYMORPHIC_MATCHER_P(polymorphicHas,
                           internal::Matcher<Decl>, AMatcher) {
   return Finder->matchesChildOf(
       Node, AMatcher, Builder,
-      TraversalKind::TK_IgnoreImplicitCastsAndParentheses,
       ASTMatchFinder::BK_First);
 }
 
@@ -212,18 +211,18 @@ TEST(Matcher, IsExpansionInMainFileMatcher) {
   M.push_back(std::make_pair("/other", "class X {};"));
   EXPECT_TRUE(matchesConditionally("#include <other>\n",
                                    recordDecl(isExpansionInMainFile()), false,
-                                   "-isystem/", M));
+                                   {"-isystem/"}, M));
 }
 
 TEST(Matcher, IsExpansionInSystemHeader) {
   FileContentMappings M;
   M.push_back(std::make_pair("/other", "class X {};"));
-  EXPECT_TRUE(matchesConditionally(
-      "#include \"other\"\n", recordDecl(isExpansionInSystemHeader()), true,
-      "-isystem/", M));
   EXPECT_TRUE(matchesConditionally("#include \"other\"\n",
                                    recordDecl(isExpansionInSystemHeader()),
-                                   false, "-I/", M));
+                                   true, {"-isystem/"}, M));
+  EXPECT_TRUE(matchesConditionally("#include \"other\"\n",
+                                   recordDecl(isExpansionInSystemHeader()),
+                                   false, {"-I/"}, M));
   EXPECT_TRUE(notMatches("class X {};",
                          recordDecl(isExpansionInSystemHeader())));
   EXPECT_TRUE(notMatches("", recordDecl(isExpansionInSystemHeader())));
@@ -238,13 +237,13 @@ TEST(Matcher, IsExpansionInFileMatching) {
       "#include <bar>\n"
       "class X {};",
       recordDecl(isExpansionInFileMatching("b.*"), hasName("B")), true,
-      "-isystem/", M));
+      {"-isystem/"}, M));
   EXPECT_TRUE(matchesConditionally(
       "#include <foo>\n"
       "#include <bar>\n"
       "class X {};",
       recordDecl(isExpansionInFileMatching("f.*"), hasName("X")), false,
-      "-isystem/", M));
+      {"-isystem/"}, M));
 }
 
 #endif // _WIN32

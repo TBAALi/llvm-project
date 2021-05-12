@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
+/// \file
 /// Implement a low-level type suitable for MachineInstr level instruction
 /// selection.
 ///
@@ -20,13 +20,14 @@
 /// Other information required for correct selection is expected to be carried
 /// by the opcode, or non-type flags. For example the distinction between G_ADD
 /// and G_FADD for int/float or fast-math flags.
-//
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_SUPPORT_LOWLEVELTYPEIMPL_H
 #define LLVM_SUPPORT_LOWLEVELTYPEIMPL_H
 
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MachineValueType.h"
 #include <cassert>
 
@@ -193,6 +194,13 @@ public:
   }
 
   void print(raw_ostream &OS) const;
+
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+  LLVM_DUMP_METHOD void dump() const {
+    print(dbgs());
+    dbgs() << '\n';
+  }
+#endif
 
   bool operator==(const LLT &RHS) const {
     return IsPointer == RHS.IsPointer && IsVector == RHS.IsVector &&

@@ -1,5 +1,5 @@
-// RUN: mlir-opt -convert-scf-to-gpu="gpu-block-dims=1 gpu-thread-dims=1" %s | FileCheck --check-prefix=CHECK-11 %s
-// RUN: mlir-opt -convert-scf-to-gpu="gpu-block-dims=2 gpu-thread-dims=2" %s | FileCheck --check-prefix=CHECK-22 %s
+// RUN: mlir-opt -convert-affine-for-to-gpu="gpu-block-dims=1 gpu-thread-dims=1" %s | FileCheck --check-prefix=CHECK-11 %s
+// RUN: mlir-opt -convert-affine-for-to-gpu="gpu-block-dims=2 gpu-thread-dims=2" %s | FileCheck --check-prefix=CHECK-22 %s
 
 // CHECK-11-LABEL: @step_1
 // CHECK-22-LABEL: @step_1
@@ -64,12 +64,12 @@ func @step_1(%A : memref<?x?x?x?xf32>, %B : memref<?x?x?x?xf32>) {
           // CHECK-22-NEXT:   %[[jj:.*]] = addi %{{.*}}, %{{.*}} : index
 
           // Using remapped values instead of loop iterators.
-          // CHECK-11:        {{.*}} = load %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
-          // CHECK-22:        {{.*}} = load %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
-          %0 = load %A[%i, %j, %ii, %jj] : memref<?x?x?x?xf32>
-          // CHECK-11-NEXT:   store {{.*}}, %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
-          // CHECK-22-NEXT:   store {{.*}}, %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
-          store %0, %B[%i, %j, %ii, %jj] : memref<?x?x?x?xf32>
+          // CHECK-11:        {{.*}} = memref.load %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
+          // CHECK-22:        {{.*}} = memref.load %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
+          %0 = memref.load %A[%i, %j, %ii, %jj] : memref<?x?x?x?xf32>
+          // CHECK-11-NEXT:   memref.store {{.*}}, %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
+          // CHECK-22-NEXT:   memref.store {{.*}}, %{{.*}}[%[[i]], %[[j]], %[[ii]], %[[jj]]] : memref<?x?x?x?xf32>
+          memref.store %0, %B[%i, %j, %ii, %jj] : memref<?x?x?x?xf32>
 
           // CHECK-11: gpu.terminator
           // CHECK-22: gpu.terminator

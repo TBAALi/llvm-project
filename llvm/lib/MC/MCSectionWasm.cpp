@@ -10,6 +10,7 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -63,7 +64,11 @@ void MCSectionWasm::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
   OS << ",\"";
 
   if (IsPassive)
-    OS << "passive";
+    OS << 'p';
+  if (Group)
+    OS << 'G';
+  if (SegmentFlags & wasm::WASM_SEG_FLAG_STRINGS)
+    OS << 'S';
 
   OS << '"';
 
@@ -76,6 +81,12 @@ void MCSectionWasm::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
     OS << '@';
 
   // TODO: Print section type.
+
+  if (Group) {
+    OS << ",";
+    printName(OS, Group->getName());
+    OS << ",comdat";
+  }
 
   if (isUnique())
     OS << ",unique," << UniqueID;

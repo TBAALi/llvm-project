@@ -573,6 +573,7 @@ def : WriteRes<WriteNop, []>;
 defm : SBWriteResPair<WriteFShuffle256, [SBPort5], 1, [1], 1, 7>;
 defm : SBWriteResPair<WriteFVarShuffle256, [SBPort5], 1, [1], 1, 7>;
 defm : SBWriteResPair<WriteShuffle256, [SBPort5], 1, [1], 1, 7>;
+defm : SBWriteResPair<WriteVPMOV256, [SBPort5], 1, [1], 1, 7>;
 defm : SBWriteResPair<WriteVarShuffle256, [SBPort5], 1, [1], 1, 7>;
 defm : SBWriteResPair<WriteFMA,  [SBPort01],  5>;
 defm : SBWriteResPair<WriteFMAX, [SBPort01],  5>;
@@ -884,7 +885,7 @@ def SBWriteResGroup64 : SchedWriteRes<[SBPort5,SBPort01,SBPort23]> {
   let NumMicroOps = 3;
   let ResourceCycles = [1,1,1];
 }
-def: InstRW<[SBWriteResGroup64], (instrs FARJMP64)>;
+def: InstRW<[SBWriteResGroup64], (instrs FARJMP64m)>;
 
 def SBWriteResGroup66 : SchedWriteRes<[SBPort0,SBPort4,SBPort23]> {
   let Latency = 7;
@@ -970,7 +971,7 @@ def SBWriteResGroup87 : SchedWriteRes<[SBPort4,SBPort5,SBPort01,SBPort23]> {
   let NumMicroOps = 5;
   let ResourceCycles = [1,1,1,2];
 }
-def: InstRW<[SBWriteResGroup87], (instrs FARCALL64)>;
+def: InstRW<[SBWriteResGroup87], (instrs FARCALL64m)>;
 
 def SBWriteResGroup93 : SchedWriteRes<[SBPort0,SBPort1,SBPort23]> {
   let Latency = 9;

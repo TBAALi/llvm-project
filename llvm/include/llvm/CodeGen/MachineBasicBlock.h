@@ -40,6 +40,7 @@ class Printable;
 class SlotIndexes;
 class StringRef;
 class raw_ostream;
+class LiveIntervals;
 class TargetRegisterClass;
 class TargetRegisterInfo;
 
@@ -152,6 +153,9 @@ private:
   /// LLVM IR.
   bool IsEHScopeEntry = false;
 
+  /// Indicates if this is a target block of a catchret.
+  bool IsEHCatchretTarget = false;
+
   /// Indicate that this basic block is the entry block of an EH funclet.
   bool IsEHFuncletEntry = false;
 
@@ -167,18 +171,19 @@ private:
   // Indicate that this basic block ends a section.
   bool IsEndSection = false;
 
-  /// Default target of the callbr of a basic block.
-  bool InlineAsmBrDefaultTarget = false;
-
-  /// List of indirect targets of the callbr of a basic block.
-  SmallPtrSet<const MachineBasicBlock*, 4> InlineAsmBrIndirectTargets;
+  /// Indicate that this basic block is the indirect dest of an INLINEASM_BR.
+  bool IsInlineAsmBrIndirectTarget = false;
 
   /// since getSymbol is a relatively heavy-weight operation, the symbol
   /// is only computed once and is cached.
   mutable MCSymbol *CachedMCSymbol = nullptr;
 
-  /// Used during basic block sections to mark the end of a basic block.
-  MCSymbol *EndMCSymbol = nullptr;
+  /// Cached MCSymbol for this block (used if IsEHCatchRetTarget).
+  mutable MCSymbol *CachedEHCatchretMCSymbol = nullptr;
+
+  /// Marks the end of the basic block. Used during basic block sections to
+  /// calculate the size of the basic block, or the BB section ending with it.
+  mutable MCSymbol *CachedEndMCSymbol = nullptr;
 
   // Intrusive list support
   MachineBasicBlock() = default;
@@ -435,6 +440,9 @@ public:
 
   bool hasEHPadSuccessor() const;
 
+  /// Returns true if this is the entry block of the function.
+  bool isEntryBlock() const;
+
   /// Returns true if this is the entry block of an EH scope, i.e., the block
   /// that used to have a catchpad or cleanuppad instruction in the LLVM IR.
   bool isEHScopeEntry() const { return IsEHScopeEntry; }
@@ -442,6 +450,12 @@ public:
   /// Indicates if this is the entry block of an EH scope, i.e., the block that
   /// that used to have a catchpad or cleanuppad instruction in the LLVM IR.
   void setIsEHScopeEntry(bool V = true) { IsEHScopeEntry = V; }
+
+  /// Returns true if this is a target block of a catchret.
+  bool isEHCatchretTarget() const { return IsEHCatchretTarget; }
+
+  /// Indicates if this is a target block of a catchret.
+  void setIsEHCatchretTarget(bool V = true) { IsEHCatchretTarget = V; }
 
   /// Returns true if this is the entry block of an EH funclet.
   bool isEHFuncletEntry() const { return IsEHFuncletEntry; }
@@ -468,34 +482,31 @@ public:
   /// Returns the section ID of this basic block.
   MBBSectionID getSectionID() const { return SectionID; }
 
+  /// Returns the unique section ID number of this basic block.
+  unsigned getSectionIDNum() const {
+    return ((unsigned)MBBSectionID::SectionType::Cold) -
+           ((unsigned)SectionID.Type) + SectionID.Number;
+  }
+
   /// Sets the section ID for this basic block.
   void setSectionID(MBBSectionID V) { SectionID = V; }
 
+  /// Returns the MCSymbol marking the end of this basic block.
+  MCSymbol *getEndSymbol() const;
+
+  /// Returns true if this block may have an INLINEASM_BR (overestimate, by
+  /// checking if any of the successors are indirect targets of any inlineasm_br
+  /// in the function).
+  bool mayHaveInlineAsmBr() const;
+
   /// Returns true if this is the indirect dest of an INLINEASM_BR.
-  bool isInlineAsmBrIndirectTarget(const MachineBasicBlock *Tgt) const {
-    return InlineAsmBrIndirectTargets.count(Tgt);
+  bool isInlineAsmBrIndirectTarget() const {
+    return IsInlineAsmBrIndirectTarget;
   }
 
   /// Indicates if this is the indirect dest of an INLINEASM_BR.
-  void addInlineAsmBrIndirectTarget(const MachineBasicBlock *Tgt) {
-    InlineAsmBrIndirectTargets.insert(Tgt);
-  }
-
-  /// Transfers indirect targets to INLINEASM_BR's copy block.
-  void transferInlineAsmBrIndirectTargets(MachineBasicBlock *CopyBB) {
-    for (auto *Target : InlineAsmBrIndirectTargets)
-      CopyBB->addInlineAsmBrIndirectTarget(Target);
-    return InlineAsmBrIndirectTargets.clear();
-  }
-
-  /// Returns true if this is the default dest of an INLINEASM_BR.
-  bool isInlineAsmBrDefaultTarget() const {
-    return InlineAsmBrDefaultTarget;
-  }
-
-  /// Indicates if this is the default deft of an INLINEASM_BR.
-  void setInlineAsmBrDefaultTarget() {
-    InlineAsmBrDefaultTarget = true;
+  void setIsInlineAsmBrIndirectTarget(bool V = true) {
+    IsInlineAsmBrIndirectTarget = V;
   }
 
   /// Returns true if it is legal to hoist instructions into this block.
@@ -514,11 +525,13 @@ public:
     return getSectionID() == MBB->getSectionID();
   }
 
-  /// Update the terminator instructions in block to account for changes to the
-  /// layout. If the block previously used a fallthrough, it may now need a
-  /// branch, and if it previously used branching it may now be able to use a
-  /// fallthrough.
-  void updateTerminator();
+  /// Update the terminator instructions in block to account for changes to
+  /// block layout which may have been made. PreviousLayoutSuccessor should be
+  /// set to the block which may have been used as fallthrough before the block
+  /// layout was modified.  If the block previously fell through to that block,
+  /// it may now need a branch. If it previously branched to another block, it
+  /// may now be able to fallthrough to the current layout successor.
+  void updateTerminator(MachineBasicBlock *PreviousLayoutSuccessor);
 
   // Machine-CFG mutators
 
@@ -594,6 +607,10 @@ public:
   /// operands in the successor blocks which refer to FromMBB to refer to this.
   void transferSuccessorsAndUpdatePHIs(MachineBasicBlock *FromMBB);
 
+  /// move all pseudo probes in this block to the end of /c ToMBB To and tag
+  /// them dangling.
+  void moveAndDanglePseudoProbes(MachineBasicBlock *ToMBB);
+
   /// Return true if any of the successors have probabilities attached to them.
   bool hasSuccessorProbabilities() const { return !Probs.empty(); }
 
@@ -639,7 +656,7 @@ public:
   /// Return the first instruction in MBB after I that is not a PHI, label or
   /// debug.  This is the correct point to insert copies at the beginning of a
   /// basic block.
-  iterator SkipPHIsLabelsAndDebug(iterator I);
+  iterator SkipPHIsLabelsAndDebug(iterator I, bool SkipPseudoOp = true);
 
   /// Returns an iterator to the first terminator instruction of this basic
   /// block. If a terminator does not exist, it returns end().
@@ -653,17 +670,47 @@ public:
   instr_iterator getFirstInstrTerminator();
 
   /// Returns an iterator to the first non-debug instruction in the basic block,
-  /// or end().
-  iterator getFirstNonDebugInstr();
-  const_iterator getFirstNonDebugInstr() const {
-    return const_cast<MachineBasicBlock *>(this)->getFirstNonDebugInstr();
+  /// or end(). Skip any pseudo probe operation if \c SkipPseudoOp is true.
+  /// Pseudo probes are like debug instructions which do not turn into real
+  /// machine code. We try to use the function to skip both debug instructions
+  /// and pseudo probe operations to avoid API proliferation. This should work
+  /// most of the time when considering optimizing the rest of code in the
+  /// block, except for certain cases where pseudo probes are designed to block
+  /// the optimizations. For example, code merge like optimizations are supposed
+  /// to be blocked by pseudo probes for better AutoFDO profile quality.
+  /// Therefore, they should be considered as a valid instruction when this
+  /// function is called in a context of such optimizations. On the other hand,
+  /// \c SkipPseudoOp should be true when it's used in optimizations that
+  /// unlikely hurt profile quality, e.g., without block merging. The default
+  /// value of \c SkipPseudoOp is set to true to maximize code quality in
+  /// general, with an explict false value passed in in a few places like branch
+  /// folding and if-conversion to favor profile quality.
+  iterator getFirstNonDebugInstr(bool SkipPseudoOp = true);
+  const_iterator getFirstNonDebugInstr(bool SkipPseudoOp = true) const {
+    return const_cast<MachineBasicBlock *>(this)->getFirstNonDebugInstr(
+        SkipPseudoOp);
   }
 
   /// Returns an iterator to the last non-debug instruction in the basic block,
-  /// or end().
-  iterator getLastNonDebugInstr();
-  const_iterator getLastNonDebugInstr() const {
-    return const_cast<MachineBasicBlock *>(this)->getLastNonDebugInstr();
+  /// or end(). Skip any pseudo operation if \c SkipPseudoOp is true.
+  /// Pseudo probes are like debug instructions which do not turn into real
+  /// machine code. We try to use the function to skip both debug instructions
+  /// and pseudo probe operations to avoid API proliferation. This should work
+  /// most of the time when considering optimizing the rest of code in the
+  /// block, except for certain cases where pseudo probes are designed to block
+  /// the optimizations. For example, code merge like optimizations are supposed
+  /// to be blocked by pseudo probes for better AutoFDO profile quality.
+  /// Therefore, they should be considered as a valid instruction when this
+  /// function is called in a context of such optimizations. On the other hand,
+  /// \c SkipPseudoOp should be true when it's used in optimizations that
+  /// unlikely hurt profile quality, e.g., without block merging. The default
+  /// value of \c SkipPseudoOp is set to true to maximize code quality in
+  /// general, with an explict false value passed in in a few places like branch
+  /// folding and if-conversion to favor profile quality.
+  iterator getLastNonDebugInstr(bool SkipPseudoOp = true);
+  const_iterator getLastNonDebugInstr(bool SkipPseudoOp = true) const {
+    return const_cast<MachineBasicBlock *>(this)->getLastNonDebugInstr(
+        SkipPseudoOp);
   }
 
   /// Convenience function that returns true if the block ends in a return
@@ -677,6 +724,17 @@ public:
   bool isEHScopeReturnBlock() const {
     return !empty() && back().isEHScopeReturn();
   }
+
+  /// Split a basic block into 2 pieces at \p SplitPoint. A new block will be
+  /// inserted after this block, and all instructions after \p SplitInst moved
+  /// to it (\p SplitInst will be in the original block). If \p LIS is provided,
+  /// LiveIntervals will be appropriately updated. \return the newly inserted
+  /// block.
+  ///
+  /// If \p UpdateLiveIns is true, this will ensure the live ins list is
+  /// accurate, including for physreg uses/defs in the original block.
+  MachineBasicBlock *splitAt(MachineInstr &SplitInst, bool UpdateLiveIns = true,
+                             LiveIntervals *LIS = nullptr);
 
   /// Split the critical edge from this block to the given successor block, and
   /// return the newly created block, or null if splitting is not possible.
@@ -841,11 +899,27 @@ public:
     return findDebugLoc(MBBI.getInstrIterator());
   }
 
+  /// Has exact same behavior as @ref findDebugLoc (it also
+  /// searches from the first to the last MI of this MBB) except
+  /// that this takes reverse iterator.
+  DebugLoc rfindDebugLoc(reverse_instr_iterator MBBI);
+  DebugLoc rfindDebugLoc(reverse_iterator MBBI) {
+    return rfindDebugLoc(MBBI.getInstrIterator());
+  }
+
   /// Find the previous valid DebugLoc preceding MBBI, skipping and DBG_VALUE
   /// instructions.  Return UnknownLoc if there is none.
   DebugLoc findPrevDebugLoc(instr_iterator MBBI);
   DebugLoc findPrevDebugLoc(iterator MBBI) {
     return findPrevDebugLoc(MBBI.getInstrIterator());
+  }
+
+  /// Has exact same behavior as @ref findPrevDebugLoc (it also
+  /// searches from the last to the first MI of this MBB) except
+  /// that this takes reverse iterator.
+  DebugLoc rfindPrevDebugLoc(reverse_instr_iterator MBBI);
+  DebugLoc rfindPrevDebugLoc(reverse_iterator MBBI) {
+    return rfindPrevDebugLoc(MBBI.getInstrIterator());
   }
 
   /// Find and return the merged DebugLoc of the branch instructions of the
@@ -879,6 +953,14 @@ public:
   void print(raw_ostream &OS, ModuleSlotTracker &MST,
              const SlotIndexes * = nullptr, bool IsStandalone = true) const;
 
+  enum PrintNameFlag {
+    PrintNameIr = (1 << 0), ///< Add IR name where available
+    PrintNameAttributes = (1 << 1), ///< Print attributes
+  };
+
+  void printName(raw_ostream &os, unsigned printNameFlags = PrintNameIr,
+                 ModuleSlotTracker *moduleSlotTracker = nullptr) const;
+
   // Printing method used by LoopInfo.
   void printAsOperand(raw_ostream &OS, bool PrintType = true) const;
 
@@ -889,6 +971,9 @@ public:
 
   /// Return the MCSymbol for this basic block.
   MCSymbol *getSymbol() const;
+
+  /// Return the EHCatchret Symbol for this basic block.
+  MCSymbol *getEHCatchretSymbol() const;
 
   Optional<uint64_t> getIrrLoopHeaderWeight() const {
     return IrrLoopHeaderWeight;
@@ -1030,9 +1115,11 @@ public:
 /// and return the resulting iterator. This function should only be used
 /// MachineBasicBlock::{iterator, const_iterator, instr_iterator,
 /// const_instr_iterator} and the respective reverse iterators.
-template<typename IterT>
-inline IterT skipDebugInstructionsForward(IterT It, IterT End) {
-  while (It != End && It->isDebugInstr())
+template <typename IterT>
+inline IterT skipDebugInstructionsForward(IterT It, IterT End,
+                                          bool SkipPseudoOp = true) {
+  while (It != End &&
+         (It->isDebugInstr() || (SkipPseudoOp && It->isPseudoProbe())))
     ++It;
   return It;
 }
@@ -1041,31 +1128,36 @@ inline IterT skipDebugInstructionsForward(IterT It, IterT End) {
 /// and return the resulting iterator. This function should only be used
 /// MachineBasicBlock::{iterator, const_iterator, instr_iterator,
 /// const_instr_iterator} and the respective reverse iterators.
-template<class IterT>
-inline IterT skipDebugInstructionsBackward(IterT It, IterT Begin) {
-  while (It != Begin && It->isDebugInstr())
+template <class IterT>
+inline IterT skipDebugInstructionsBackward(IterT It, IterT Begin,
+                                           bool SkipPseudoOp = true) {
+  while (It != Begin &&
+         (It->isDebugInstr() || (SkipPseudoOp && It->isPseudoProbe())))
     --It;
   return It;
 }
 
 /// Increment \p It, then continue incrementing it while it points to a debug
 /// instruction. A replacement for std::next.
-template <typename IterT> inline IterT next_nodbg(IterT It, IterT End) {
-  return skipDebugInstructionsForward(std::next(It), End);
+template <typename IterT>
+inline IterT next_nodbg(IterT It, IterT End, bool SkipPseudoOp = true) {
+  return skipDebugInstructionsForward(std::next(It), End, SkipPseudoOp);
 }
 
 /// Decrement \p It, then continue decrementing it while it points to a debug
 /// instruction. A replacement for std::prev.
-template <typename IterT> inline IterT prev_nodbg(IterT It, IterT Begin) {
-  return skipDebugInstructionsBackward(std::prev(It), Begin);
+template <typename IterT>
+inline IterT prev_nodbg(IterT It, IterT Begin, bool SkipPseudoOp = true) {
+  return skipDebugInstructionsBackward(std::prev(It), Begin, SkipPseudoOp);
 }
 
 /// Construct a range iterator which begins at \p It and moves forwards until
 /// \p End is reached, skipping any debug instructions.
 template <typename IterT>
-inline auto instructionsWithoutDebug(IterT It, IterT End) {
-  return make_filter_range(make_range(It, End), [](const MachineInstr &MI) {
-    return !MI.isDebugInstr();
+inline auto instructionsWithoutDebug(IterT It, IterT End,
+                                     bool SkipPseudoOp = true) {
+  return make_filter_range(make_range(It, End), [=](const MachineInstr &MI) {
+    return !MI.isDebugInstr() && !(SkipPseudoOp && MI.isPseudoProbe());
   });
 }
 

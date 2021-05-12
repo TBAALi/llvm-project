@@ -10,8 +10,9 @@
 
 // Call erase(const_iterator position) with end()
 
-#if _LIBCPP_DEBUG >= 1
+// UNSUPPORTED: libcxx-no-debug-mode
 
+// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DEBUG=1
 #define _LIBCPP_ASSERT(x, m) ((x) ? (void)0 : std::exit(0))
 
 #include <string>
@@ -20,33 +21,13 @@
 #include <exception>
 
 #include "test_macros.h"
-#include "min_allocator.h"
 
 int main(int, char**)
 {
-    {
     std::string l1("123");
     std::string::const_iterator i = l1.end();
     l1.erase(i);
     assert(false);
-    }
-#if TEST_STD_VER >= 11
-    {
-    typedef std::basic_string<char, std::char_traits<char>, min_allocator<char>> S;
-    S l1("123");
-    S::const_iterator i = l1.end();
-    l1.erase(i);
-    assert(false);
-    }
-#endif
+
+    return 0;
 }
-
-#else
-
-int main(int, char**)
-{
-
-  return 0;
-}
-
-#endif
